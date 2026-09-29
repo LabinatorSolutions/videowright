@@ -13,11 +13,11 @@ Or check out the [blooper reel](https://github.com/user-attachments/assets/a1c86
 ## Overview
 
 - **Video from prompt** -- generate an animated video, simply from a prompt
+- **Live Preview and Editing** —- iterate in chat, see changes instantly
 - **AI voice-overs** -- generate narration from a script, then auto-sync video timing to the audio
 - **Sound Effects and Music** -- source and mix many audio sources
 - **Six built-in visual styles** -- or create your own from a brand guide or description
 - **Pixel-perfect MP4 export** -- deterministic frame-by-frame rendering, no dropped frames
-- **Hot-reloading dev server** -- iterate in chat, see changes instantly
 - **Works in any major coding agent** -- Claude Code, Codex, opencode, etc
 
 ## Install
