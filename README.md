@@ -4,6 +4,8 @@
 
 Videowright creates demo videos, explainer videos, and product walkthroughs from your coding agent. Just describe what you want and it generates your video (including audio). Iterate in chat until it's perfect.
 
+Videowright is like `rails new` for video projects. It sets up all the scaffolding you need: scripts, beats, voice-over, sfx, music, rendering, audio mixing, styles, [and more](#overview).
+
 ## Demo - Sound on!
 
 <video src="https://github.com/user-attachments/assets/ba106686-3ff5-4d57-8fbb-141ad40c8c86" width="600" controls></video>
