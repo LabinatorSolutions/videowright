@@ -105,6 +105,14 @@ describe("cli_dev_against_demo_smoke", () => {
 		}
 	});
 
+	it("segments directory holds only discoverable segments/<id>/index.ts folders", () => {
+		const segmentsDir = join(DEMO_ROOT, "segments");
+		const undiscoverable = readdirSync(segmentsDir).filter(
+			(entry) => !entry.startsWith(".") && !existsSync(join(segmentsDir, entry, "index.ts")),
+		);
+		expect(undiscoverable).toEqual([]);
+	});
+
 	it("demo_video has audio-track directory structure", () => {
 		const videoDir = join(DEMO_ROOT, "videos/demo_video");
 		expect(existsSync(join(videoDir, "voiceover_script/script.md"))).toBe(true);

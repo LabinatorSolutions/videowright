@@ -3,15 +3,17 @@
  * Mounted at /video/<slug>.
  */
 
+// Imported by package name, not a relative path: only src/cli/entry/ ships as
+// source, and consumer segments share this same "videowright" instance.
 import {
 	Player,
 	applyMetaDefaults,
 	buildSegmentLoaderMap,
 	buildTransitionLoaderMap,
+	resolveTiming,
 	validateTimeline,
-} from "../../../index.js";
-import type { Config, ProjectInfo, Timeline } from "../../../index.js";
-import { resolveTiming } from "../../../timeline/resolveTiming.js";
+} from "videowright";
+import type { Config, ProjectInfo, Timeline } from "videowright";
 import { renderDownloadModal } from "../components/download_modal.js";
 import { renderHideHudTab } from "../components/hide_hud_tab.js";
 import { renderTopBar } from "../components/top_bar.js";

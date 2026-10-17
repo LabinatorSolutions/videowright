@@ -55,7 +55,7 @@ Create the consumer repo directory structure:
 
 Only create directories that do not already exist. Do not create any files inside these directories.
 
-**Ensure `.env` is in `.gitignore`.** Check if a `.gitignore` file exists at the repo root. If it does not exist, create one. In either case, verify that `.env` is listed as an ignored pattern. If it is not present, add `.env` to the file. This prevents API keys and other secrets from being committed to the repository.
+**Ensure `.env` and `node_modules/` are in `.gitignore`.** Check if a `.gitignore` file exists at the repo root. If it does not exist, create one. In either case, verify that both `.env` and `node_modules/` are listed as ignored patterns, and add whichever is missing. This keeps API keys and other secrets, and the installed dependencies, out of the repository.
 
 ### Step 3 -- Pick first style
 
@@ -66,7 +66,7 @@ This is its own conversational turn -- do not combine with any other question.
 Dispatch to [setup_new_style.md](setup_new_style.md) with:
 
 - `setAsDefault: false` -- do **not** let the style flow write `videowright.config.ts`. The config does not exist yet; Step 4 writes it with the chosen slug.
-- `copySample: true` -- install the sample segment into `segments/<slug>-sample/index.ts`. The sample segment showcases the chosen style.
+- `copySample: true` -- install the sample segments into `segments/<slug>-sample-<scene>/index.ts` (one folder per scene). The sample segments showcase the chosen style.
 
 Wait for the style creation flow to complete. Record the chosen slug for Step 4.
 

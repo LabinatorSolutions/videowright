@@ -315,6 +315,7 @@ export async function runRender(opts: RenderOptions): Promise<RenderResult> {
 		globalsVirtualModulePlugin,
 		projectVirtualModulePlugin,
 		segmentDiscoveryPlugin,
+		viteAliases,
 	} = await import("./vite_helpers.js");
 	const pkgRoot = findPackageRoot();
 	const entryDir = resolve(pkgRoot, "src/cli/entry");
@@ -340,9 +341,7 @@ export async function runRender(opts: RenderOptions): Promise<RenderResult> {
 			},
 		},
 		resolve: {
-			alias: {
-				"@consumer": cwd,
-			},
+			alias: viteAliases(cwd, pkgRoot),
 		},
 	});
 

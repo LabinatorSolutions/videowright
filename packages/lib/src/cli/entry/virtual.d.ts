@@ -1,8 +1,26 @@
 /**
- * Re-export of virtual module declarations.
- * The canonical declarations live in src/virtual-modules.d.ts (outside the
- * src/cli/entry/ exclude path so tsc can see them). This file is kept for
- * Vite's dev-time TypeScript resolution within the entry/ directory.
+ * Type declarations for the Vite virtual modules the entry files import.
+ *
+ * src/cli/entry/** is excluded from the build tsconfig, so tsconfig.test.json
+ * lists this file explicitly for tests that import entry modules.
  */
 
-/// <reference path="../../virtual-modules.d.ts" />
+declare module "virtual:vw-globals" {
+	export const timelinePath: string;
+	export const consumerRoot: string;
+	export const audioFile: string | undefined;
+	export const resolvedTiming: Record<string, number[]> | undefined;
+	export const audioTrackNone: boolean | undefined;
+	export const renderFps: number | undefined;
+}
+
+declare module "virtual:videowright/project" {
+	import type { ProjectInfo } from "videowright";
+	const projectInfo: ProjectInfo;
+	export default projectInfo;
+}
+
+declare module "virtual:vw-segments" {
+	const segments: Record<string, () => Promise<unknown>>;
+	export default segments;
+}

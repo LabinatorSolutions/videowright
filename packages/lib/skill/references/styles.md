@@ -40,7 +40,7 @@ styles/
     └── ...
 ```
 
-The `sample/` folder inside a style contains one TypeScript file per scene type. When installed, samples are copied to `segments/<slug>-sample-<scene>.ts` (flat files under `segments/`) for use in videos. The sources stay in the style folder as references.
+The `sample/` folder inside a style contains one TypeScript file per scene type. When installed, each sample is copied to `segments/<slug>-sample-<scene>/index.ts` (one folder per sample, named after the segment id) for use in videos. The sources stay in the style folder as references.
 
 **Required files per style:**
 

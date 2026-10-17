@@ -30,12 +30,16 @@ export {
 	buildTransitionLoaderMap,
 	validateTimeline,
 	applyMetaDefaults,
+	resolveTiming,
 } from "./timeline/index.js";
 export type {
 	SegmentLoaderMap,
 	TransitionLoaderMap,
 	TimelineError,
 	TimelineValidationResult,
+	ResolvedTiming,
+	ResolveTimingArgs,
+	TimingSegment,
 } from "./timeline/index.js";
 
 // Built-in transitions

@@ -11,14 +11,16 @@ import { consumerRoot, renderFps, timelinePath } from "virtual:vw-globals";
 // Virtual module provided by segmentDiscoveryPlugin
 import segmentGlobRaw from "virtual:vw-segments";
 
+// Imported by package name, not a relative path: only src/cli/entry/ ships as
+// source, and consumer segments share this same "videowright" instance.
 import {
 	Player,
 	applyMetaDefaults,
 	buildSegmentLoaderMap,
 	buildTransitionLoaderMap,
 	validateTimeline,
-} from "../../index.js";
-import type { Config, Timeline } from "../../index.js";
+} from "videowright";
+import type { Config, Timeline } from "videowright";
 
 // Extend window for render-mode globals
 declare global {

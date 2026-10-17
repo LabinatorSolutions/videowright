@@ -8,6 +8,7 @@
 		"declarationMap": false,
 		"types": ["node"]
 	},
+	"files": ["src/cli/entry/virtual.d.ts"],
 	"include": ["src/**/*", "test/**/*"],
 	"exclude": ["src/cli/entry/**/*"],
 	"references": [{ "path": "./tsconfig.json" }]

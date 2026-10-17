@@ -22,6 +22,10 @@ jobs:
       - name: Install Playwright Chromium
         run: npx -w packages/lib playwright install chromium --with-deps
 
+      # The packed-tarball smoke test runs `videowright render`, which needs ffmpeg.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - name: Run Playwright e2e tests
         run: npm run test:e2e -w packages/lib
 

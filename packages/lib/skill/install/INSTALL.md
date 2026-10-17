@@ -161,7 +161,7 @@ Install the dev tools that Videowright projects use. These mirror the core Video
 
 If a dev dependency is already present at a compatible version, skip it. If present at an incompatible version, warn the user and let them decide whether to upgrade.
 
-### 4d: Ensure tsconfig.json exists
+### 4d: Ensure tsconfig.json and env.d.ts exist
 
 If `tsconfig.json` does **not** exist in the current directory, copy the template:
 
@@ -170,6 +170,14 @@ cp node_modules/videowright/skill/assets/install/tsconfig.json tsconfig.json
 ```
 
 If `tsconfig.json` **does** exist, leave it alone. Do not attempt to merge tsconfig files — the user's existing configuration takes precedence.
+
+If `env.d.ts` does **not** exist in the current directory, copy the template:
+
+```bash
+cp node_modules/videowright/skill/assets/install/env.d.ts env.d.ts
+```
+
+`env.d.ts` declares `*.css` modules so TypeScript accepts the `tokens.css` import at the top of every `timeline.ts` (TypeScript 6+ fails with TS2882 without it). If `env.d.ts` already existed, make sure it contains `declare module "*.css";` and append that line if it does not. The template `tsconfig.json` already includes it. If the user kept their own `tsconfig.json` and it has an `include` or `files` list that does not already cover `env.d.ts`, tell them to add `env.d.ts` to it.
 
 ### 4e: Install Playwright browsers
 
@@ -243,7 +251,7 @@ Apply these rules in order:
 
 1. Confirm that `node_modules/videowright/` exists after installation. If it does not, surface the error to the user and stop.
 2. Read `package.json` and verify that `"type"` is set to `"module"`. If it is not, the dev server will fail with `Cannot use import statement outside a module`. Fix it before proceeding.
-3. Confirm that `tsconfig.json` exists.
+3. Confirm that `tsconfig.json` and `env.d.ts` exist.
 
 ---
 
@@ -278,6 +286,8 @@ Follow the symlink creation algorithm in Appendix B. In summary:
 6. Create the symlink:
    - macOS/Linux: `ln -s <relative-target> <symlink-path>`
    - Windows: `mklink /D <symlink-path> <relative-target>`
+
+**Sandbox note:** some agent sandboxes (Claude Code's included) block creating `.claude/skills/` or the symlinks inside it by default. If `mkdir` or `ln -s` is denied, re-run that command outside the sandbox (request permission to run it unsandboxed), or ask the user to run it, then continue.
 
 **Windows note:** If symlink creation fails on Windows, tell the user exactly:
 
@@ -380,7 +390,7 @@ Given a target file path and the content string to place inside the markers:
 
 Given a symlink path (e.g., `.claude/skills/videowright`) and a target directory (`node_modules/videowright/skill/`):
 
-1. **Create intermediate directories**: ensure the parent directory of the symlink exists (e.g., `.claude/skills/`). Create with `mkdir -p` if needed.
+1. **Create intermediate directories**: ensure the parent directory of the symlink exists (e.g., `.claude/skills/`). Create with `mkdir -p` if needed. If the sandbox denies this (or the symlink in step 4), see the sandbox note in Step 5.
 
 2. **Compute relative target**: the symlink target must be a relative path from the symlink's parent directory to the target. Compute this dynamically based on the actual directory depth. Examples:
    - **Root install**: symlink at `.claude/skills/videowright`, target at `node_modules/videowright/skill/` -- relative target is `../../node_modules/videowright/skill/`
