@@ -6,7 +6,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Connect, Plugin, ViteDevServer } from "vite";
+import type { Alias, Connect, Plugin, ViteDevServer } from "vite";
 import type { ProjectInfo } from "../types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -31,6 +31,25 @@ export function findPackageRoot(): string {
 	}
 	// Fallback: assume __dirname is inside dist/cli/ or src/cli/
 	return resolve(__dirname, "../..");
+}
+
+/**
+ * `resolve.alias` entries shared by the dev and render servers.
+ *
+ * `@consumer` points at the consumer project root. When the package's
+ * src/index.ts exists (only in this repo; the published tarball never ships
+ * it), the bare `videowright` specifier also maps to it, so the entry and the
+ * consumer's segments share one instance running current source without a
+ * rebuild. Installed packages get no such alias and resolve `videowright`
+ * through node_modules to dist/.
+ */
+export function viteAliases(consumerRoot: string, pkgRoot: string): Alias[] {
+	const aliases: Alias[] = [{ find: "@consumer", replacement: consumerRoot }];
+	const sourceIndex = resolve(pkgRoot, "src/index.ts");
+	if (existsSync(sourceIndex)) {
+		aliases.push({ find: /^videowright$/, replacement: sourceIndex });
+	}
+	return aliases;
 }
 
 /**

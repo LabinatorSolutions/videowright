@@ -95,6 +95,12 @@ describe("CI workflow files", () => {
 			);
 		});
 
+		it("installs ffmpeg for the packed-tarball render smoke test", () => {
+			const doc = loadWorkflow("e2e.yml");
+			const runCmds = getRunCommands(getSteps(doc));
+			expect(runCmds).toContainEqual(expect.stringContaining("install -y ffmpeg"));
+		});
+
 		it("runs e2e tests via workspace command", () => {
 			const doc = loadWorkflow("e2e.yml");
 			const runCmds = getRunCommands(getSteps(doc));

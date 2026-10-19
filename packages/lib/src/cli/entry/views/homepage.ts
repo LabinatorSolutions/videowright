@@ -3,7 +3,7 @@
  * Shows a grid of video cards, or the empty-state panel when no videos exist.
  */
 
-import type { ProjectInfo } from "../../../types.js";
+import type { ProjectInfo } from "videowright";
 import { renderDownloadModal } from "../components/download_modal.js";
 import { renderEmptyState } from "../components/empty_state.js";
 import { renderTopBar } from "../components/top_bar.js";

@@ -13,7 +13,7 @@ The caller passes two flags:
 | Flag | Meaning | Default by caller |
 |---|---|---|
 | `setAsDefault` | Write this slug into `videowright.config.ts` as `defaultStyle` | `false` for setup (setup.md writes config itself), `false` for per-video styles, caller's choice for "change default style" |
-| `copySample` | Install sample segments at `segments/<slug>-sample-<scene>.ts` demonstrating the style | `true` during initial setup, `false` when adding mid-project (unless user asks) |
+| `copySample` | Install sample segments at `segments/<slug>-sample-<scene>/index.ts` demonstrating the style | `true` during initial setup, `false` when adding mid-project (unless user asks) |
 
 ## Flow
 
@@ -46,7 +46,7 @@ The user has a brand deck, CSS file, Figma export, paste-able content, local fil
 3. Transform the input into `styles/<slug>/`:
    - Draft `STYLE.md` with frontmatter (`title`, `slug`, `picker_description`, `font_sources`) and body (aesthetic rules, motion vocabulary, don'ts).
    - Draft `tokens.css` with `:root` custom properties. Always include the 6 recommended tokens (`--color-bg`, `--color-fg`, `--color-accent`, `--font-display`, `--font-body`, `--font-mono`). If the source material does not define values for all 6, pick reasonable defaults from the source's palette/typography and flag which ones you inferred.
-   - If `copySample` is true, also draft sample segments demonstrating the style. Each sample lives at `styles/<slug>/sample/<scene>.ts` and will be copied to `segments/<slug>-sample-<scene>.ts` in the final actions step.
+   - If `copySample` is true, also draft sample segments demonstrating the style. Each sample lives at `styles/<slug>/sample/<scene>.ts` and will be copied to `segments/<slug>-sample-<scene>/index.ts` in the final actions step. Give each sample `id: '<slug>-sample-<scene>'` (segment discovery needs the id to equal the folder name) and import only from `videowright` (no relative imports), so the copy in `segments/` still resolves.
 4. Read back a brief overview: "Here's what I built from your input: [summary]. Look good or any changes?"
 5. Iterate until the user confirms.
 
@@ -58,7 +58,7 @@ The user provides a path to another Videowright project (the "source project").
 2. If multiple styles exist in the source project, ask the user which one to copy. If only one, confirm it.
 3. Read `<source-project>/styles/<slug>/STYLE.md` and `<source-project>/styles/<slug>/tokens.css`.
 4. Write them to `styles/<slug>/STYLE.md` and `styles/<slug>/tokens.css` in this project (the current working directory). The slug is preserved from the source.
-5. If `copySample` is true and `<source-project>/styles/<slug>/sample/` exists, copy it to `styles/<slug>/sample/` in this project, then copy each `sample/<scene>.ts` to `segments/<slug>-sample-<scene>.ts` in this project.
+5. If `copySample` is true and `<source-project>/styles/<slug>/sample/` exists, copy it to `styles/<slug>/sample/` in this project. The final actions step copies each sample into `segments/`.
 6. Show the user a summary of what was copied and ask: "Look good or any changes?"
 7. Iterate until confirmed.
 
@@ -70,7 +70,7 @@ The user types a description: "Modern look using Inter, white background, #e0e23
    - Always include the 6 recommended tokens. Infer values from the description; flag any you guessed.
    - Write aesthetic rules, motion vocabulary, and don'ts that match the described feel.
    - Pick Google Fonts URLs for `font_sources` based on the described typography.
-   - If `copySample` is true, also draft sample segments demonstrating the described style. Each sample lives at `styles/<slug>/sample/<scene>.ts` and will be copied to `segments/<slug>-sample-<scene>.ts` in the final actions step.
+   - If `copySample` is true, also draft sample segments demonstrating the described style. Each sample lives at `styles/<slug>/sample/<scene>.ts` and will be copied to `segments/<slug>-sample-<scene>/index.ts` in the final actions step. Give each sample `id: '<slug>-sample-<scene>'` (segment discovery needs the id to equal the folder name) and import only from `videowright` (no relative imports), so the copy in `segments/` still resolves.
 2. Read back a brief overview and ask: "Look good or any changes?"
 3. Iterate until confirmed.
 
@@ -80,7 +80,7 @@ Choose one of the built-in packs shipped with Videowright. The pack list and des
 
 1. The user picks a pack from the list presented in the question. Confirm the choice.
 2. Copy the entire `node_modules/videowright/skill/assets/styles/<slug>/` folder into the consumer repo at `styles/<slug>/`. This includes `STYLE.md`, `tokens.css`, `brand.md`, `reference/scenes.html`, `reference/animations.jsx`, and `sample/*.ts`. The slug is locked to the pack's slug -- no rename.
-3. If `copySample` is true, copy each `styles/<slug>/sample/<scene>.ts` into `segments/<slug>-sample-<scene>.ts` (flat file directly under `segments/`). If any destination already exists, skip that file and report it to the user.
+3. If `copySample` is true, copy each `styles/<slug>/sample/<scene>.ts` into `segments/<slug>-sample-<scene>/index.ts` (one folder per sample; the dev server only discovers `segments/<id>/index.ts`, where the folder name equals the segment id). If any destination already exists, skip that file and report it to the user.
 
 After any mode, the user's copy in `styles/<slug>/` is the source of truth. The skill does not auto-update it from `skill/assets/` later.
 
@@ -89,7 +89,7 @@ After any mode, the user's copy in `styles/<slug>/` is the source of truth. The 
 After the style is created (any mode):
 
 1. **Modes 1 and 3 only:** Write `styles/<slug>/STYLE.md` and `styles/<slug>/tokens.css` to the consumer repo. (Mode 2 and Mode 4 already copied these in their respective steps.)
-2. If `copySample` is true, copy each `styles/<slug>/sample/<scene>.ts` to `segments/<slug>-sample-<scene>.ts`. The sources stay in the style folder as references; the copies in `segments/` are what videos use. If any destination already exists, skip that file and tell the user.
+2. If `copySample` is true, copy each `styles/<slug>/sample/<scene>.ts` to `segments/<slug>-sample-<scene>/index.ts`. The sources stay in the style folder as references; the copies in `segments/` are what videos use. If any destination already exists, skip that file and tell the user. In each copy, rewrite any relative import so it resolves from `segments/<slug>-sample-<scene>/index.ts` (for example, a Mode 2 sample taken from another project that imports `../../../components/chart` from its `sample/` folder needs `../../components/chart`). If an imported file does not exist in this project, tell the user.
 3. If `setAsDefault` is true, set `defaultStyle: '<slug>'` in `videowright.config.ts`.
 4. Confirm to the user what was created and where.
 

@@ -34,8 +34,8 @@ vi.mock("../../src/cli/entry/components/hide_hud_tab.js", () => ({
 	renderHideHudTab: vi.fn(() => document.createElement("button")),
 }));
 
-// Mock index.js re-exports to provide stubs for the build helpers
-vi.mock("../../src/index.js", () => ({
+// Mock the library (imported by package name) to provide stubs for the build helpers
+vi.mock("videowright", () => ({
 	Player: vi.fn().mockImplementation(() => ({
 		load: vi.fn().mockResolvedValue(undefined),
 		start: vi.fn().mockResolvedValue(undefined),
@@ -43,11 +43,8 @@ vi.mock("../../src/index.js", () => ({
 	applyMetaDefaults: vi.fn((t: unknown) => t),
 	buildSegmentLoaderMap: vi.fn(() => new Map()),
 	buildTransitionLoaderMap: vi.fn(() => new Map()),
-	validateTimeline: vi.fn(() => ({ ok: true, errors: [] })),
-}));
-
-vi.mock("../../src/timeline/resolveTiming.js", () => ({
 	resolveTiming: vi.fn(() => ({ perSegment: {} })),
+	validateTimeline: vi.fn(() => ({ ok: true, errors: [] })),
 }));
 
 import { renderVideoView } from "../../src/cli/entry/views/video_view.js";

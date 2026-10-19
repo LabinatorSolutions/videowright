@@ -7,9 +7,18 @@ export default defineConfig({
 		include: ["test/**/*.test.ts"],
 	},
 	resolve: {
-		alias: {
-			"virtual:vw-globals": resolve(__dirname, "test/__mocks__/virtual-vw-globals.ts"),
-			"virtual:vw-segments": resolve(__dirname, "test/__mocks__/virtual-vw-segments.ts"),
-		},
+		alias: [
+			{
+				find: "virtual:vw-globals",
+				replacement: resolve(__dirname, "test/__mocks__/virtual-vw-globals.ts"),
+			},
+			{
+				find: "virtual:vw-segments",
+				replacement: resolve(__dirname, "test/__mocks__/virtual-vw-segments.ts"),
+			},
+			// Entry files import the library by package name; unit tests run them
+			// against source so they never depend on a stale or missing dist/.
+			{ find: /^videowright$/, replacement: resolve(__dirname, "src/index.ts") },
+		],
 	},
 });

@@ -16,6 +16,7 @@ import {
 	projectVirtualModulePlugin,
 	segmentDiscoveryPlugin,
 	videoRouteMiddlewarePlugin,
+	viteAliases,
 } from "./vite_helpers.js";
 
 export interface DevOptions {
@@ -130,9 +131,7 @@ export async function runDev(opts: DevOptions): Promise<DevResult> {
 			},
 		},
 		resolve: {
-			alias: {
-				"@consumer": cwd,
-			},
+			alias: viteAliases(cwd, pkgRoot),
 		},
 	});
 

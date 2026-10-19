@@ -108,12 +108,16 @@ describe("skill file structure", () => {
 		expect(content).not.toContain("{{");
 	});
 
-	it("hello_world has segment reference files", () => {
+	it("hello_world has segment reference files laid out as segments/<id>/index.ts", () => {
 		const segDir = resolve(SKILL_ROOT, "assets/hello_world/segments");
 		expect(existsSync(segDir)).toBe(true);
 
-		const files = readdirSync(segDir).sort();
-		expect(files).toEqual(["hello_intro.ts", "hello_outro.ts"]);
+		const folders = readdirSync(segDir).sort();
+		expect(folders).toEqual(["hello-intro", "hello-outro"]);
+		for (const id of folders) {
+			const content = readFileSync(resolve(segDir, id, "index.ts"), "utf-8");
+			expect(content).toMatch(new RegExp(`id:\\s*["']${id}["']`));
+		}
 	});
 
 	it("hello_world has README and PLAN as plain reference files", () => {
@@ -141,9 +145,9 @@ describe("skill file structure", () => {
 		expect(content).toContain("styles/editorial-mono/tokens.css");
 	});
 
-	it("hello_intro.ts uses only the 6 recommended style tokens", () => {
+	it("hello-intro segment uses only the 6 recommended style tokens", () => {
 		const content = readFileSync(
-			resolve(SKILL_ROOT, "assets/hello_world/segments/hello_intro.ts"),
+			resolve(SKILL_ROOT, "assets/hello_world/segments/hello-intro/index.ts"),
 			"utf-8",
 		);
 		expect(content).toContain("var(--color-bg)");
@@ -169,9 +173,9 @@ describe("skill file structure", () => {
 		}
 	});
 
-	it("hello_outro.ts uses only the 6 recommended style tokens", () => {
+	it("hello-outro segment uses only the 6 recommended style tokens", () => {
 		const content = readFileSync(
-			resolve(SKILL_ROOT, "assets/hello_world/segments/hello_outro.ts"),
+			resolve(SKILL_ROOT, "assets/hello_world/segments/hello-outro/index.ts"),
 			"utf-8",
 		);
 		expect(content).toContain("var(--color-bg)");
@@ -270,9 +274,27 @@ describe("skill file structure", () => {
 		}
 	});
 
+	it("docs only place segment files at segments/<id>/index.ts", () => {
+		// The dev server only discovers segments/<id>/index.ts; a flat
+		// segments/<name>.ts file is silently ignored.
+		const docs = (readdirSync(SKILL_ROOT, { recursive: true }) as string[]).filter((f) =>
+			f.endsWith(".md"),
+		);
+		expect(docs.length).toBeGreaterThan(10);
+
+		for (const doc of docs) {
+			const content = readFileSync(resolve(SKILL_ROOT, doc), "utf-8");
+			for (const [path] of content.matchAll(/\bsegments\/[^\s`'")]+\.[jt]s\b/g)) {
+				expect(path, `${doc} mentions a segment file outside a segment folder`).toMatch(
+					/^segments\/[^/]+\/index\.[jt]s$/,
+				);
+			}
+		}
+	});
+
 	it("segment reference files use defineSegment from videowright", () => {
 		const introContent = readFileSync(
-			resolve(SKILL_ROOT, "assets/hello_world/segments/hello_intro.ts"),
+			resolve(SKILL_ROOT, "assets/hello_world/segments/hello-intro/index.ts"),
 			"utf-8",
 		);
 		expect(introContent).toContain('import { defineSegment } from "videowright"');
@@ -280,7 +302,7 @@ describe("skill file structure", () => {
 		expect(introContent).toContain("waitForNext");
 
 		const outroContent = readFileSync(
-			resolve(SKILL_ROOT, "assets/hello_world/segments/hello_outro.ts"),
+			resolve(SKILL_ROOT, "assets/hello_world/segments/hello-outro/index.ts"),
 			"utf-8",
 		);
 		expect(outroContent).toContain('import { defineSegment } from "videowright"');
@@ -362,6 +384,77 @@ describe("skill file structure", () => {
 		expect(Array.isArray(tsconfig.include)).toBe(true);
 	});
 
+	describe("install template env.d.ts", () => {
+		const envDts = readFileSync(resolve(SKILL_ROOT, "assets/install/env.d.ts"), "utf-8");
+		const install = readFileSync(resolve(SKILL_ROOT, "install/INSTALL.md"), "utf-8");
+		const stringAssetPatterns = [
+			...envDts.matchAll(
+				/declare module "([^"]+)" \{\s*const (\w+): string;\s*export default \2;\s*\}/g,
+			),
+		].map((m) => m[1]);
+
+		it("declares CSS modules", () => {
+			expect(envDts).toContain('declare module "*.css";');
+		});
+
+		it("declares image, video, ?raw and ?url imports as a string default export", () => {
+			expect(stringAssetPatterns).toEqual([
+				"*.png",
+				"*.jpg",
+				"*.jpeg",
+				"*.gif",
+				"*.webp",
+				"*.svg",
+				"*.mp4",
+				"*.webm",
+				"*?raw",
+				"*?url",
+			]);
+			expect([...envDts.matchAll(/declare module/g)]).toHaveLength(stringAssetPatterns.length + 1);
+		});
+
+		it("is wired into the template tsconfig and the install flow", () => {
+			const tsconfig = JSON.parse(
+				readFileSync(resolve(SKILL_ROOT, "assets/install/tsconfig.json"), "utf-8"),
+			);
+			expect(tsconfig.include).toContain("env.d.ts");
+			expect(install).toContain("node_modules/videowright/skill/assets/install/env.d.ts env.d.ts");
+		});
+
+		it("INSTALL.md describes every declared pattern", () => {
+			for (const pattern of ["*.css", ...stringAssetPatterns]) {
+				expect(install, `INSTALL.md does not mention ${pattern}`).toContain(`\`${pattern}\``);
+			}
+		});
+	});
+
+	describe("setup_new_style.md sample segments", () => {
+		const doc = readFileSync(resolve(SKILL_ROOT, "references/setup_new_style.md"), "utf-8");
+		const textUnderHeading = (heading: string) => {
+			const start = doc.indexOf(`\n${heading}`);
+			expect(start, `missing heading ${heading}`).toBeGreaterThanOrEqual(0);
+			const body = doc.slice(start + 1 + heading.length);
+			const end = body.search(/\n#{2,3} /);
+			return heading + (end < 0 ? body : body.slice(0, end));
+		};
+
+		it.each(["### Mode 1", "### Mode 3"])(
+			"%s drafts samples with the discoverable id and videowright-only imports",
+			(heading) => {
+				const content = textUnderHeading(heading);
+				expect(content).toContain("`id: '<slug>-sample-<scene>'`");
+				expect(content).toContain("import only from `videowright`");
+			},
+		);
+
+		it("the final copy step rewrites relative imports for the segments/ location", () => {
+			const content = textUnderHeading("## Final actions");
+			expect(content).toMatch(
+				/rewrite any relative import so it resolves from `segments\/<slug>-sample-<scene>\/index\.ts`/,
+			);
+		});
+	});
+
 	describe.each(STYLE_PACKS)("style pack: %s", (packName) => {
 		const styleDir = resolve(SKILL_ROOT, `assets/styles/${packName}`);
 
@@ -421,21 +514,16 @@ describe("skill file structure", () => {
 				expect(content).toMatch(new RegExp(`id:\\s*["']${packName}-sample-${scene}["']`));
 			});
 
-			it("imports nothing from outside its own pack folder", () => {
+			// Samples are copied to segments/<slug>-sample-<scene>/index.ts, so a
+			// relative import would no longer resolve after the copy.
+			it("imports only from videowright", () => {
 				const content = readFileSync(samplePath, "utf-8");
-				const imports = content.match(/from\s+["']([^"']+)["']/g) ?? [];
-				for (const imp of imports) {
-					const path = imp.match(/from\s+["']([^"']+)["']/)?.[1] ?? "";
-					expect(
-						path === "videowright" || path.startsWith("./") || path.startsWith("../"),
-						`Import "${path}" should be from "videowright" or a relative path within the pack`,
-					).toBe(true);
-					if (path.startsWith("../")) {
-						expect(
-							!path.startsWith("../../"),
-							`Import "${path}" escapes the ${packName} pack folder`,
-						).toBe(true);
-					}
+				const specifiers = [...content.matchAll(/\b(?:from|import)\s*\(?\s*["']([^"']+)["']/g)].map(
+					(m) => m[1],
+				);
+				expect(specifiers.length).toBeGreaterThan(0);
+				for (const specifier of specifiers) {
+					expect(specifier, `sample/${scene}.ts may only import "videowright"`).toBe("videowright");
 				}
 			});
 		});
