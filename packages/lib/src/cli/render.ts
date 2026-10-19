@@ -6,18 +6,18 @@
  * - Date, Date.now, performance.now
  * - setTimeout, setInterval, clearTimeout, clearInterval
  * - requestAnimationFrame, cancelAnimationFrame
- * - Element.prototype.animate (WAAPI)
+ * - animations on the document timeline (WAAPI, CSS animations and transitions)
  *
  * The render driver advances the virtual clock by `frameMs` per frame,
- * firing timers and RAF callbacks deterministically. WAAPI animations
- * are paused and driven by explicit `currentTime` updates.
+ * firing timers and RAF callbacks deterministically. Animations are paused
+ * and driven by explicit `currentTime` updates.
  *
  * Frames are byte-identical across runs because:
  * - All time APIs return virtual time controlled by the driver
  * - hold() uses setTimeout, which is virtualized
  * - clock() uses performance.now, which is virtualized
  * - RAF callbacks fire exactly once per render frame
- * - WAAPI animations advance by exactly frameMs per frame
+ * - Animations advance by exactly frameMs per frame
  */
 
 import { existsSync } from "node:fs";
@@ -567,7 +567,7 @@ export async function runRender(opts: RenderOptions): Promise<RenderResult> {
 					}
 
 					// Advance virtual clock by one frame's worth of time.
-					// This fires pending timers, RAF callbacks, and updates WAAPI animations.
+					// This fires pending timers, RAF callbacks, and drives animations.
 					await page.evaluate(`window.__VW_ADVANCE_CLOCK__(${frameMs})`);
 
 					// Capture frame

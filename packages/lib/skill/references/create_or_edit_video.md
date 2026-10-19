@@ -60,7 +60,8 @@ After writing each segment, perform a focused code review before moving on. This
 6. **WAAPI / CSS animations used** for DOM animations. Staggered entrances prefer WAAPI `delay` parameter over `ctx.hold()` between `.animate()` calls (less code, smoother easing).
 7. **Lottie uses manual frame drive** -- `autoplay: false` with `anim.goToAndStop(ctx.clock(), false)` per tick.
 8. **Three.js reads `ctx.clock()`** for time-derived values (preferred for clarity; `performance.now()` also works under the shim).
-9. **Imports, types, and segment shape** match project conventions (see [authoring_segment.md](authoring_segment.md)).
+9. **Nothing the render clock doesn't control** -- no SVG SMIL, autoplaying `<video>`, animated GIFs, scroll-driven animations, iframes, or reads of `document.timeline.currentTime`. See "Not controlled by the render clock" in [authoring_segment.md](authoring_segment.md).
+10. **Imports, types, and segment shape** match project conventions (see [authoring_segment.md](authoring_segment.md)).
 
 **If any issue is found:** fix the segment code, then re-check the full checklist before continuing. A segment is ready only after a clean pass.
 
