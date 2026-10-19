@@ -90,7 +90,7 @@ export const TIME_SHIM_SOURCE = `
   var nextTimerId = 1;
   var timers = new Map();     // id -> { fireAt, cb, args, repeat? }
   var rafCallbacks = [];      // [{ id, cb }]
-  var frameStartMs = 0;       // virtualMs when the latest clock advance started
+  var frameStartMs = 0;       // virtualMs a change seen late applies from (see localTimeOf)
   var lastScanVirtualMs = 0;  // virtualMs at the latest scan for running animations
 
   // ----- Driver-mode animation state -----
@@ -312,8 +312,9 @@ export const TIME_SHIM_SOURCE = `
 
   // The local time of a driven animation at the current virtual time. Local
   // time advances at the animation's playbackRate. The shim can't see when
-  // between frames the rate changed, so a new rate applies from the start of
-  // the current frame.
+  // during a clock advance the rate changed, so a new rate applies from
+  // frameStartMs: the start of the advance, or between advances, the current
+  // virtual time.
   function localTimeOf(entry, rate) {
     if (rate !== entry.rate) {
       moveOrigin(entry, Math.max(frameStartMs, entry.originVirtualMs));
@@ -329,17 +330,34 @@ export const TIME_SHIM_SOURCE = `
     entry.originVirtualMs = atMs;
   }
 
+  // The entry of an animation the shim drives on the virtual clock, or
+  // undefined. One running that the shim doesn't drive yet is adopted first,
+  // so author control never reads its real-clock time:
+  // - New and pending: created since the scan that starts each clock advance
+  //   (a CSS animation or transition started by a callback), with no frame
+  //   rendered since. Its currentTime is exact: taken over at it.
+  // - Otherwise (it escaped since the previous scan, e.g. a revived finished
+  //   one) by the scan's rule. That lists it for driving but doesn't hold it
+  //   paused: the caller does, or the next driveAnimations().
+  function drivenEntryOf(anim) {
+    if (mode !== 'driver') return undefined;
+    var entry = entries.get(anim);
+    if (entry && (entry.state === 'playing' || entry.state === 'detached')) return entry;
+    if (!onDocumentTimeline(anim) || realPlayState(anim) !== 'running') return undefined;
+    if (!entry && anim.pending) {
+      takeOver(anim, getCurrentTime(anim) || 0);
+      return entries.get(anim);
+    }
+    return adoptEscaped(anim, entry);
+  }
+
   // The shim's local time for an animation at the current virtual time.
   function currentLocalMs(anim) {
+    var driven = drivenEntryOf(anim);
+    if (driven) return localTimeOf(driven, anim.playbackRate);
     var entry = entries.get(anim);
-    if (entry && (entry.state === 'playing' || entry.state === 'detached')) {
-      return localTimeOf(entry, anim.playbackRate);
-    }
     if (entry && entry.state === 'paused') return entry.originLocalMs;
     if (entry && entry.state === 'finished') return entry.limitMs;
-    // Running but not taken over yet: counted from the previous scan, as
-    // adoptRunningAnimations() will.
-    if (realPlayState(anim) === 'running') return (virtualMs - lastScanVirtualMs) * anim.playbackRate;
     return getCurrentTime(anim) || 0;
   }
 
@@ -369,9 +387,8 @@ export const TIME_SHIM_SOURCE = `
     return false;
   }
 
-  // The shim can't see when between frames animation-play-state changed, so
-  // the change applies from the start of the current frame, like a
-  // playbackRate change.
+  // The shim can't see when animation-play-state changed, so the change
+  // applies from frameStartMs, like a playbackRate change.
   function setCssPaused(entry, paused) {
     moveOrigin(entry, Math.max(frameStartMs, entry.originVirtualMs));
     entry.cssPaused = paused;
@@ -434,10 +451,8 @@ export const TIME_SHIM_SOURCE = `
       // A driven animation shows the previous frame's time: bring it to the
       // current virtual time first, so play() on a playing animation is a
       // no-op and reverse() turns at the right time.
-      var entry = mode === 'driver' ? entries.get(this) : undefined;
-      if (entry && (entry.state === 'playing' || entry.state === 'detached')) {
-        setCurrentTime(this, localTimeOf(entry, this.playbackRate));
-      }
+      var entry = drivenEntryOf(this);
+      if (entry) setCurrentTime(this, localTimeOf(entry, this.playbackRate));
       var result = realMethod.apply(this, arguments);
       noteApiPlayStateChange(this);
       if (mode === 'driver' && onDocumentTimeline(this)) takeOver(this, getCurrentTime(this));
@@ -448,15 +463,15 @@ export const TIME_SHIM_SOURCE = `
   AnimationProto.reverse = playOnVirtualClock(realReverse);
 
   AnimationProto.pause = function() {
-    var entry = mode === 'driver' ? entries.get(this) : undefined;
-    var moving = entry && (entry.state === 'playing' || entry.state === 'detached');
-    var localMs = moving ? localTimeOf(entry, this.playbackRate) : undefined;
+    var driven = drivenEntryOf(this);
+    var localMs = driven ? localTimeOf(driven, this.playbackRate) : undefined;
     var result = realPause.apply(this, arguments);
     noteApiPlayStateChange(this);
+    var entry = mode === 'driver' ? entries.get(this) : undefined;
     if (entry) {
       // A driven animation shows the previous frame's time: pause it at the
       // current virtual time instead.
-      if (moving) setCurrentTime(this, localMs);
+      if (driven) setCurrentTime(this, localMs);
       entry.state = 'paused';
       entry.originLocalMs = getCurrentTime(this);
     }
@@ -587,46 +602,54 @@ export const TIME_SHIM_SOURCE = `
         continue;
       }
       var playState = realPlayState(anim);
-      var rate = anim.playbackRate;
       if (playState === 'paused' && !entry && followsCssPlayState(anim)) {
         // Paused by animation-play-state: its currentTime is the time it
         // holds. Taken over now, it resumes from exactly there whenever the
         // CSS resumes it (driveAnimations() applies animation-play-state).
         entry = entryOf(anim);
-        setOrigin(entry, getCurrentTime(anim) || 0, lastScanVirtualMs, rate);
+        setOrigin(entry, getCurrentTime(anim) || 0, lastScanVirtualMs, anim.playbackRate);
         entry.cssPaused = true;
         drive(entry);
         continue;
       }
-      if (playState !== 'running') continue;
-      if (!entry) {
-        // New: a CSS animation or transition, which starts at local time 0.
-        // Its currentTime counts real milliseconds since it started (the
-        // screenshot of the previous frame can start it), so it can't be
-        // used: treat it as started at the previous scan's virtual time
-        // instead. That is repeatable at any render speed, and off by at most
-        // a frame.
-        entry = entryOf(anim);
-        setOrigin(entry, 0, lastScanVirtualMs, rate);
-      } else if (entry.state === 'finished') {
-        // Revived. A timing change continues the model's clock from the
-        // finish (see markFinished); a playbackRate flip plays back from
-        // where it finished, from the start of this frame.
-        if (rate !== entry.rate) setOrigin(entry, entry.limitMs, frameStartMs, rate);
-      } else {
-        // Restarted some other way: resume from where the shim last had it.
-        setOrigin(entry, entry.originLocalMs, lastScanVirtualMs, rate);
-      }
-      drive(entry);
+      if (playState === 'running') adoptEscaped(anim, entry);
     }
     lastScanVirtualMs = virtualMs;
   }
 
+  // Take over an animation running on the real clock that the shim doesn't
+  // drive (entry is its current entry, if any), from a local time derived
+  // only from virtual time.
+  function adoptEscaped(anim, entry) {
+    var rate = anim.playbackRate;
+    if (!entry) {
+      // New: a CSS animation or transition, which starts at local time 0.
+      // Its currentTime counts real milliseconds since it started (the
+      // screenshot of the previous frame can start it), so it can't be
+      // used: treat it as started at the previous scan's virtual time
+      // instead. That is repeatable at any render speed, and off by at most
+      // a frame.
+      entry = entryOf(anim);
+      setOrigin(entry, 0, lastScanVirtualMs, rate);
+    } else if (entry.state === 'finished') {
+      // Revived. A timing change continues the model's clock from the
+      // finish (see markFinished); a playbackRate flip plays back from
+      // where it finished, from frameStartMs (see localTimeOf).
+      if (rate !== entry.rate) setOrigin(entry, entry.limitMs, frameStartMs, rate);
+    } else {
+      // Restarted some other way: resume from where the shim last had it.
+      setOrigin(entry, entry.originLocalMs, lastScanVirtualMs, rate);
+    }
+    drive(entry);
+    return entry;
+  }
+
   // Set every driven animation to its local time at the current virtual time,
-  // and finish those that reached their end. Reads every animation before
-  // writing any: a write invalidates style, so a read after it flushes style
-  // again, once per CSS animation.
+  // and finish those that reached their end. Returns whether any finished.
+  // Reads every animation before writing any: a write invalidates style, so a
+  // read after it flushes style again, once per CSS animation.
   function driveAnimations() {
+    var finishedAny = false;
     var rates = [];
     var endTimes = [];
     var escaped = [];
@@ -696,8 +719,10 @@ export const TIME_SHIM_SOURCE = `
         var limitMs = rates[j] < 0 ? 0 : endTimes[j];
         var finishedAtMs = driven.originVirtualMs + (limitMs - driven.originLocalMs) / rates[j];
         markFinished(driven, limitMs, finishedAtMs, rates[j]);
+        finishedAny = true;
       }
     }
+    return finishedAny;
   }
 
   // ----- Mode switch: passthrough -> driver -----
@@ -762,6 +787,12 @@ export const TIME_SHIM_SOURCE = `
     frameStartMs = virtualMs;
     var target = virtualMs + deltaMs;
 
+    // Take over what escaped onto the real clock since the previous advance
+    // (e.g. a CSS animation started during the screenshot) before any
+    // callback runs, so one that is new and pending during the callbacks was
+    // created by them (see drivenEntryOf).
+    adoptRunningAnimations();
+
     // Fire timers in chronological order up to target.
     // The function is async so that microtasks (e.g. Promise resolutions from
     // ctx.hold) drain between timer fires. This ensures awaiting code resumes
@@ -813,7 +844,23 @@ export const TIME_SHIM_SOURCE = `
     await drainMicrotasks();
 
     adoptRunningAnimations();
-    driveAnimations();
+    var finishedAny = driveAnimations();
+    // Virtual time stands still from here until the next advance: a change
+    // made meanwhile (in a finished handler, or an event handler during the
+    // screenshot) applies from now.
+    frameStartMs = virtualMs;
+
+    // Let continuations of the finished promises just resolved run (e.g.
+    // awaiting anim.finished, then a class change), and take over what they
+    // start at this frame's virtual time. After the advance returns, a short
+    // CSS transition they start could run and finish on the real clock before
+    // the next scan sees it. Bounded, for chains of animations that finish at
+    // once.
+    for (var pass = 0; finishedAny && pass < 8; pass++) {
+      await drainMicrotasks();
+      adoptRunningAnimations();
+      finishedAny = driveAnimations();
+    }
   };
 
   async function drainMicrotasks() {

@@ -1354,6 +1354,41 @@ describe.skipIf(!hasBrowser)("time shim: primitive-level DOM assertions", () => 
 		}
 	});
 
+	it("CSS transition started after awaiting finished starts at the finish, however slow the render", async () => {
+		const { page, context } = await createShimmedPage(
+			`<style>.moved { transform: translateX(1000px) }</style>${boxes("lead")}<div id="box" style="${BOX_STYLE}top:60px;transition:transform 150ms linear;"></div>`,
+		);
+
+		try {
+			// Computes the style the transition starts from.
+			expect(await translateX(page, "box")).toBe(0);
+			await page.evaluate(() => {
+				const lead = document
+					.getElementById("lead")
+					?.animate([{ transform: "translateX(0px)" }, { transform: "translateX(1000px)" }], {
+						duration: 100,
+					});
+				void (async () => {
+					await lead?.finished;
+					document.getElementById("box")?.classList.add("moved");
+				})();
+			});
+
+			// Each frame takes longer in real time than the whole transition.
+			const realGapMs = 250;
+			await advanceClock(page, 100, FRAME_MS, realGapMs);
+			expect(await translateX(page, "box")).toBeCloseTo(0, 0);
+			await advanceClock(page, FRAME_MS, FRAME_MS, realGapMs);
+			expect(await translateX(page, "box")).toBeCloseTo(1000 / 3, 0);
+			await advanceClock(page, FRAME_MS, FRAME_MS, realGapMs);
+			expect(await translateX(page, "box")).toBeCloseTo(2000 / 3, 0);
+			await advanceClock(page, FRAME_MS, FRAME_MS, realGapMs);
+			expect(await translateX(page, "box")).toBe(1000);
+		} finally {
+			await context.close();
+		}
+	});
+
 	it("CSS animation cancelled during the segment is not taken over again", async () => {
 		const { page, context } = await createShimmedPage(`<style>${SLIDE_CSS}</style>${boxes("css")}`);
 
@@ -1538,6 +1573,54 @@ describe.skipIf(!hasBrowser)("time shim: primitive-level DOM assertions", () => 
 		}
 	});
 
+	it.each([
+		["alone", false],
+		["followed by play()", true],
+	] as const)(
+		"playbackRate flip in a finished handler, %s, plays back from the finish",
+		async (_, callPlay) => {
+			const { page, context } = await createShimmedPage(boxes("box"));
+
+			try {
+				await watchAnimation(page, "box", { duration: 1000, fill: "forwards" });
+				// A ping-pong: the handler runs after the clock advance that finished it.
+				await page.evaluate((play) => {
+					const anim = window.__anims?.box;
+					anim?.finished.then(() => {
+						anim.playbackRate = -1;
+						if (play) anim.play();
+					});
+				}, callPlay);
+
+				await advanceClock(page, 1000);
+				await advanceClock(page, 200, FRAME_MS, SLOW_FRAME_REAL_MS);
+				expect(await translateX(page, "box")).toBeCloseTo(800, 0);
+			} finally {
+				await context.close();
+			}
+		},
+	);
+
+	it("pause() right after a playbackRate change between frames pauses where it was shown", async () => {
+		const { page, context } = await createShimmedPage(boxes("box"));
+
+		try {
+			await watchAnimation(page, "box", { duration: 4000 });
+			await advanceClock(page, 500);
+			await page.evaluate(() => {
+				const anim = window.__anims?.box;
+				if (!anim) return;
+				anim.playbackRate = 2;
+				anim.pause();
+			});
+
+			await advanceClock(page, 200);
+			expect(await animationCurrentTime(page, "box")).toBeCloseTo(500, 3);
+		} finally {
+			await context.close();
+		}
+	});
+
 	it("pause() holds a driven animation still, and play() resumes it from there", async () => {
 		const { page, context } = await createShimmedPage(boxes("box"));
 
@@ -1617,6 +1700,110 @@ describe.skipIf(!hasBrowser)("time shim: primitive-level DOM assertions", () => 
 			await context.close();
 		}
 	});
+
+	it.each([
+		["pause", FRAME_MS],
+		["play", FRAME_MS + 40],
+		["reverse", FRAME_MS - 40],
+	] as const)(
+		"%s() on a CSS animation not taken over yet starts from its virtual time",
+		async (method, afterMs) => {
+			const { page, context } = await createShimmedPage(
+				`<style>${SLIDE_CSS}</style>${boxes("css")}`,
+			);
+
+			try {
+				await setStyle(page, "css", { animation: "slide 1s linear forwards" });
+				// The browser starts it on its real-time timeline meanwhile.
+				await page.waitForTimeout(150);
+				await page.evaluate((name) => {
+					requestAnimationFrame(() => document.getElementById("css")?.getAnimations()[0][name]());
+				}, method);
+
+				// Treated as started at the previous frame, as the scan would: one frame of progress.
+				await advanceClock(page, FRAME_MS);
+				expect(await translateX(page, "css")).toBeCloseTo(FRAME_MS, 0);
+				await advanceClock(page, 40, 20, SLOW_FRAME_REAL_MS);
+				expect(await translateX(page, "css")).toBeCloseTo(afterMs, 0);
+			} finally {
+				await context.close();
+			}
+		},
+	);
+
+	it.each([
+		["pause", "animation", 0, 0],
+		["reverse", "animation", 1000, 1000 - FRAME_MS],
+		["pause", "transition", 0, 0],
+		["reverse", "transition", 1000, 1000 - FRAME_MS],
+	] as const)(
+		"%s() on a CSS %s started in the same frame callback acts at its exact time, as in a browser",
+		async (method, kind, shownMs, nextFrameMs) => {
+			const { page, context } = await createShimmedPage(
+				`<style>${SLIDE_CSS}</style><div id="css" style="${BOX_STYLE}top:0;transition:transform 1s linear;"></div>`,
+			);
+
+			try {
+				// Computes the style a transition starts from.
+				expect(await translateX(page, "css")).toBe(0);
+				await advanceClock(page, FRAME_MS);
+				await page.evaluate(
+					([name, start]) => {
+						requestAnimationFrame(() => {
+							const el = document.getElementById("css");
+							if (!el) return;
+							if (start === "animation") el.style.animation = "slide 1s linear forwards";
+							else el.style.transform = "translateX(1000px)";
+							el.getAnimations()[0][name]();
+						});
+					},
+					[method, kind] as const,
+				);
+
+				// Pending, at 0: paused there, or reversed from the end.
+				await advanceClock(page, FRAME_MS);
+				expect(await translateX(page, "css")).toBeCloseTo(shownMs, 0);
+				await advanceClock(page, FRAME_MS, FRAME_MS, SLOW_FRAME_REAL_MS);
+				expect(await translateX(page, "css")).toBeCloseTo(nextFrameMs, 0);
+			} finally {
+				await context.close();
+			}
+		},
+	);
+
+	it.each([
+		["pause()", "pause", 1550, "paused"],
+		["a startTime write", "startTime", 1750, "running"],
+	] as const)(
+		"%s on a finished animation revived since the previous frame uses its virtual time",
+		async (_, action, expectedMs, expectedPlayState) => {
+			const { page, context } = await createShimmedPage(boxes("box"));
+
+			try {
+				await watchAnimation(page, "box", { duration: 1000, fill: "forwards" });
+				await advanceClock(page, 1500);
+				await page.evaluate(() => window.__anims?.box.effect?.updateTiming({ duration: 3000 }));
+				// Running on the real-time timeline meanwhile.
+				await page.waitForTimeout(150);
+				await page.evaluate((act) => {
+					requestAnimationFrame(() => {
+						const anim = window.__anims?.box;
+						if (act === "pause") anim?.pause();
+						else if (anim) anim.startTime = 0;
+					});
+				}, action);
+
+				// Continued from its finish at 1000ms, as the scan would: at 1550ms
+				// in that frame, then paused there or playing on.
+				await advanceClock(page, FRAME_MS);
+				await advanceClock(page, 200, FRAME_MS, SLOW_FRAME_REAL_MS);
+				expect(await translateX(page, "box")).toBeCloseTo((expectedMs / 3000) * 1000, 0);
+				expect(await playState(page, "box")).toBe(expectedPlayState);
+			} finally {
+				await context.close();
+			}
+		},
+	);
 
 	it("infinite loop resumes when its element is put back in the document", async () => {
 		const { page, context } = await createShimmedPage(boxes("box"));

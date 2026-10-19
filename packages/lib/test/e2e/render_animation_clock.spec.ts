@@ -396,7 +396,7 @@ test("bar positions in later segments are the same at any render speed", async (
 		const throttledSamples = await sampleBars(throttled, frames);
 		for (const [i, { at, bars }] of (await sampleBars(fullSpeed, frames)).entries()) {
 			for (const bar of ["css", "waapi", "ref"] as const) {
-				const difference = Math.abs(bars[bar] - throttledSamples[i].bars[bar]);
+				const difference = loopDistance(bars[bar], throttledSamples[i].bars[bar]);
 				expect(difference, `${bar} at ${at}`).toBeLessThan(MAX_DRIFT_PX);
 			}
 		}
