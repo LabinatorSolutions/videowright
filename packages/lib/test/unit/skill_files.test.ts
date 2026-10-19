@@ -384,17 +384,75 @@ describe("skill file structure", () => {
 		expect(Array.isArray(tsconfig.include)).toBe(true);
 	});
 
-	it("install template env.d.ts declares CSS modules and the install flow wires it in", () => {
+	describe("install template env.d.ts", () => {
 		const envDts = readFileSync(resolve(SKILL_ROOT, "assets/install/env.d.ts"), "utf-8");
-		expect(envDts).toMatch(/declare module ["']\*\.css["']/);
-
-		const tsconfig = JSON.parse(
-			readFileSync(resolve(SKILL_ROOT, "assets/install/tsconfig.json"), "utf-8"),
-		);
-		expect(tsconfig.include).toContain("env.d.ts");
-
 		const install = readFileSync(resolve(SKILL_ROOT, "install/INSTALL.md"), "utf-8");
-		expect(install).toContain("node_modules/videowright/skill/assets/install/env.d.ts env.d.ts");
+		const stringAssetPatterns = [
+			...envDts.matchAll(
+				/declare module "([^"]+)" \{\s*const (\w+): string;\s*export default \2;\s*\}/g,
+			),
+		].map((m) => m[1]);
+
+		it("declares CSS modules", () => {
+			expect(envDts).toContain('declare module "*.css";');
+		});
+
+		it("declares image, video, ?raw and ?url imports as a string default export", () => {
+			expect(stringAssetPatterns).toEqual([
+				"*.png",
+				"*.jpg",
+				"*.jpeg",
+				"*.gif",
+				"*.webp",
+				"*.svg",
+				"*.mp4",
+				"*.webm",
+				"*?raw",
+				"*?url",
+			]);
+			expect([...envDts.matchAll(/declare module/g)]).toHaveLength(stringAssetPatterns.length + 1);
+		});
+
+		it("is wired into the template tsconfig and the install flow", () => {
+			const tsconfig = JSON.parse(
+				readFileSync(resolve(SKILL_ROOT, "assets/install/tsconfig.json"), "utf-8"),
+			);
+			expect(tsconfig.include).toContain("env.d.ts");
+			expect(install).toContain("node_modules/videowright/skill/assets/install/env.d.ts env.d.ts");
+		});
+
+		it("INSTALL.md describes every declared pattern", () => {
+			for (const pattern of ["*.css", ...stringAssetPatterns]) {
+				expect(install, `INSTALL.md does not mention ${pattern}`).toContain(`\`${pattern}\``);
+			}
+		});
+	});
+
+	describe("setup_new_style.md sample segments", () => {
+		const doc = readFileSync(resolve(SKILL_ROOT, "references/setup_new_style.md"), "utf-8");
+		const textUnderHeading = (heading: string) => {
+			const start = doc.indexOf(`\n${heading}`);
+			expect(start, `missing heading ${heading}`).toBeGreaterThanOrEqual(0);
+			const body = doc.slice(start + 1 + heading.length);
+			const end = body.search(/\n#{2,3} /);
+			return heading + (end < 0 ? body : body.slice(0, end));
+		};
+
+		it.each(["### Mode 1", "### Mode 3"])(
+			"%s drafts samples with the discoverable id and videowright-only imports",
+			(heading) => {
+				const content = textUnderHeading(heading);
+				expect(content).toContain("`id: '<slug>-sample-<scene>'`");
+				expect(content).toContain("import only from `videowright`");
+			},
+		);
+
+		it("the final copy step rewrites relative imports for the segments/ location", () => {
+			const content = textUnderHeading("## Final actions");
+			expect(content).toMatch(
+				/rewrite any relative import so it resolves from `segments\/<slug>-sample-<scene>\/index\.ts`/,
+			);
+		});
 	});
 
 	describe.each(STYLE_PACKS)("style pack: %s", (packName) => {

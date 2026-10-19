@@ -177,7 +177,14 @@ If `env.d.ts` does **not** exist in the current directory, copy the template:
 cp node_modules/videowright/skill/assets/install/env.d.ts env.d.ts
 ```
 
-`env.d.ts` declares `*.css` modules so TypeScript accepts the `tokens.css` import at the top of every `timeline.ts` (TypeScript 6+ fails with TS2882 without it). If `env.d.ts` already existed, make sure it contains `declare module "*.css";` and append that line if it does not. The template `tsconfig.json` already includes it. If the user kept their own `tsconfig.json` and it has an `include` or `files` list that does not already cover `env.d.ts`, tell them to add `env.d.ts` to it.
+`env.d.ts` declares the non-TypeScript imports that Vite handles, so TypeScript accepts them:
+
+- `*.css` -- the `tokens.css` import at the top of every `timeline.ts` (TypeScript 6+ fails with TS2882 without it).
+- Images (`*.png`, `*.jpg`, `*.jpeg`, `*.gif`, `*.webp`, `*.svg`) and video (`*.mp4`, `*.webm`) -- the default export is the file's URL, typed `string`.
+- `*?raw` -- the default export is the file's text, typed `string` (for example, inline SVG markup from `import icon from "./icon.svg?raw"`).
+- `*?url` -- the default export is the file's URL, typed `string`, for any file type.
+
+If `env.d.ts` already existed, compare it with the template at `node_modules/videowright/skill/assets/install/env.d.ts` and append each template `declare module` block whose module pattern the existing file does not already declare. Leave the existing declarations as they are; declaring the same pattern twice can conflict. If the existing file contains `/// <reference types="vite/client" />`, Vite's client types already declare every pattern in the template, so leave the file unchanged. The template `tsconfig.json` already includes `env.d.ts`. If the user kept their own `tsconfig.json` and it has an `include` or `files` list that does not already cover `env.d.ts`, tell them to add `env.d.ts` to it.
 
 ### 4e: Install Playwright browsers
 
