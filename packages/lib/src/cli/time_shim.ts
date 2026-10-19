@@ -74,7 +74,7 @@ export const TIME_SHIM_SOURCE = `
   var nextTimerId = 1;
   var timers = new Map();     // id -> { fireAt, cb, args, repeat? }
   var rafCallbacks = [];      // [{ id, cb }]
-  var trackedAnimations = []; // [{ animation, startVirtualMs }]
+  var trackedAnimations = []; // [{ animation, originLocalMs, originVirtualMs, rate }]
 
   // ----- performance.now -----
   performance.now = function() {
@@ -204,35 +204,70 @@ export const TIME_SHIM_SOURCE = `
       return anim;
     }
     // Driver mode: pause and drive via currentTime
-    return trackAnimation(anim, options);
+    return trackAnimation(anim, 0);
   };
 
-  function trackAnimation(anim, options) {
+  // Take over an animation: pause it at localMs and drive it from the
+  // virtual clock from now on, until the clock finishes it at its end time.
+  // An infinite loop never finishes, as in a browser.
+  function trackAnimation(anim, localMs) {
     anim.pause();
-    anim.currentTime = 0;
-    var entry = { animation: anim, startVirtualMs: virtualMs };
-    trackedAnimations.push(entry);
-    var duration = 0;
-    if (typeof options === 'number') {
-      duration = options;
-    } else if (options && typeof options.duration === 'number') {
-      duration = options.duration;
-    }
-    var delay = 0;
-    if (options && typeof options === 'object' && typeof options.delay === 'number') {
-      delay = options.delay;
-    }
-    var totalDuration = delay + duration;
-    entry.totalDuration = totalDuration;
-    entry.resolved = false;
-    var finishedPromise = new Promise(function(resolve) {
-      entry.resolve = resolve;
-    });
-    Object.defineProperty(anim, 'finished', {
-      get: function() { return finishedPromise; },
-      configurable: true
+    anim.currentTime = localMs;
+    trackedAnimations.push({
+      animation: anim,
+      originLocalMs: localMs,
+      originVirtualMs: virtualMs,
+      rate: anim.playbackRate
     });
     return anim;
+  }
+
+  // The tracked animation's local time at the current virtual time. Local
+  // time advances at the animation's playbackRate. The shim can't see when
+  // between frames the rate changed, so a new rate applies from the start of
+  // the current frame.
+  function localTimeOf(entry, rate, frameStartMs) {
+    if (rate !== entry.rate) {
+      var rebaseAt = Math.max(frameStartMs, entry.originVirtualMs);
+      entry.originLocalMs += (rebaseAt - entry.originVirtualMs) * entry.rate;
+      entry.originVirtualMs = rebaseAt;
+      entry.rate = rate;
+    }
+    return entry.originLocalMs + (virtualMs - entry.originVirtualMs) * rate;
+  }
+
+  // End of the animation's active interval in its local time: delay + every
+  // iteration + endDelay, and Infinity for an infinite loop. Undefined when
+  // the browser can't report it: the animation is still driven but never
+  // auto-finished. Callers read it every frame rather than caching it,
+  // because updateTiming() or a CSS change can alter it at any time.
+  function computeEndTime(anim) {
+    var effect = anim.effect;
+    // Per the WAAPI spec, an animation without an effect ends at time 0.
+    if (!effect) return 0;
+    try {
+      var endTime = effect.getComputedTiming().endTime;
+      return typeof endTime === 'number' && !isNaN(endTime) ? endTime : undefined;
+    } catch (e) {
+      return undefined;
+    }
+  }
+
+  // The browser's finished condition: playing forwards, an animation
+  // finishes at its end time; playing backwards, at 0; at rate 0, never.
+  function hasFinished(localMs, rate, endTime) {
+    if (rate > 0) return localMs >= endTime;
+    if (rate < 0) return localMs <= 0;
+    return false;
+  }
+
+  function canNeverFinish(rate, endTime) {
+    return rate === 0 || (rate > 0 && endTime === Infinity);
+  }
+
+  function targetIsDetached(anim) {
+    var target = anim.effect && anim.effect.target;
+    return !!target && !target.isConnected;
   }
 
   // ----- Mode switch: passthrough -> driver -----
@@ -269,39 +304,14 @@ export const TIME_SHIM_SOURCE = `
     });
     realRafMeta.clear();
 
-    // Capture any WAAPI animations still running from boot and pause+track them
+    // Take over animations (WAAPI and CSS) still running from boot. Paused
+    // ones (by pause() or animation-play-state) stay paused, as in a browser.
     try {
       var liveAnims = document.getAnimations();
       for (var i = 0; i < liveAnims.length; i++) {
         var a = liveAnims[i];
-        if (a.playState === 'running' || a.playState === 'paused') {
-          var ct = a.currentTime || 0;
-          a.pause();
-          a.currentTime = ct;
-          var entry = {
-            animation: a,
-            startVirtualMs: virtualMs - ct,
-            totalDuration: undefined,
-            resolved: false,
-            resolve: undefined
-          };
-          // Try to read duration from the animation effect
-          try {
-            var timing = a.effect && a.effect.getTiming ? a.effect.getTiming() : null;
-            if (timing) {
-              var dur = typeof timing.duration === 'number' ? timing.duration : 0;
-              var del = typeof timing.delay === 'number' ? timing.delay : 0;
-              entry.totalDuration = del + dur;
-            }
-          } catch(e) {}
-          var finishedPromise = new Promise(function(resolve) {
-            entry.resolve = resolve;
-          });
-          Object.defineProperty(a, 'finished', {
-            get: function() { return finishedPromise; },
-            configurable: true
-          });
-          trackedAnimations.push(entry);
+        if (a.playState === 'running') {
+          trackAnimation(a, a.currentTime || 0);
         }
       }
     } catch(e) {
@@ -315,6 +325,7 @@ export const TIME_SHIM_SOURCE = `
   window.__VW_ADVANCE_CLOCK__ = async function(deltaMs) {
     if (mode === 'passthrough') return; // no-op during boot
 
+    var frameStartMs = virtualMs;
     var target = virtualMs + deltaMs;
 
     // Fire timers in chronological order up to target.
@@ -362,26 +373,39 @@ export const TIME_SHIM_SOURCE = `
       try { queued[i].cb(virtualMs); } catch(e) { console.error('[VW shim] RAF error:', e); }
     }
 
-    // Update WAAPI animations
+    // Update tracked animations
     for (var j = trackedAnimations.length - 1; j >= 0; j--) {
       var entry = trackedAnimations[j];
       var anim = entry.animation;
-      // Skip cancelled animations
+      // Drop cancelled animations. Reading playState also flushes pending
+      // style, so the end time read below reflects the latest CSS.
       if (anim.playState === 'idle') {
         trackedAnimations.splice(j, 1);
         continue;
       }
-      var elapsed = virtualMs - entry.startVirtualMs;
+      var rate = anim.playbackRate;
+      var endTime = computeEndTime(anim);
+      // An animation that never finishes on an element that has left the
+      // document (e.g. an infinite loop in an unmounted segment) can't be
+      // seen: stop driving it so entries don't pile up across segments.
+      // Trade-off: if the element is re-attached later, the animation stays
+      // paused where it was dropped instead of resuming.
+      if (canNeverFinish(rate, endTime) && targetIsDetached(anim)) {
+        trackedAnimations.splice(j, 1);
+        continue;
+      }
+      var localMs = localTimeOf(entry, rate, frameStartMs);
       try {
-        anim.currentTime = elapsed;
+        anim.currentTime = localMs;
       } catch(e) {
         trackedAnimations.splice(j, 1);
         continue;
       }
-      // Check if animation is complete
-      if (entry.totalDuration !== undefined && elapsed >= entry.totalDuration && !entry.resolved) {
-        entry.resolved = true;
-        if (entry.resolve) entry.resolve(anim);
+      if (endTime !== undefined && hasFinished(localMs, rate, endTime)) {
+        // Puts the animation in the browser's finished state: resolves its
+        // own finished promise (however early it was read) and queues its
+        // finish / animationend events.
+        try { anim.finish(); } catch(e) {}
         trackedAnimations.splice(j, 1);
       }
     }

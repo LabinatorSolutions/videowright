@@ -18,6 +18,9 @@
  * - Date.now: advances with virtual clock
  * - clearTimeout: cancels pending virtual timer
  * - Timer ordering: multiple timers fire in chronological order
+ * - Animation end time: iterations, delay/endDelay, infinite loops, timing
+ *   changes after tracking, playbackRate, cancel, removed elements, and
+ *   animations adopted at engagement (CSS and WAAPI)
  *
  * Skips if Playwright browser is not available or cannot launch.
  */
@@ -86,6 +89,109 @@ body { width: 800px; height: 600px; }
 		await context.close();
 		throw e;
 	}
+}
+
+type ShimPage = Awaited<ReturnType<typeof createShimmedPage>>["page"];
+
+declare global {
+	interface Window {
+		__anims?: Record<string, Animation>;
+		__finishedAt?: Record<string, number>;
+		__finishError?: Record<string, string>;
+		__finishEvent?: Record<string, boolean>;
+	}
+}
+
+// Steps in which animation tests advance the clock, like render frames.
+const FRAME_MS = 50;
+
+const BOX_STYLE = "position:absolute;left:0;width:50px;height:50px;";
+
+/** An absolutely positioned box per id, stacked so they don't overlap. */
+function boxes(...ids: string[]): string {
+	return ids.map((id, i) => `<div id="${id}" style="${BOX_STYLE}top:${i * 60}px;"></div>`).join("");
+}
+
+const SLIDE_CSS = "@keyframes slide { to { transform: translateX(1000px) } }";
+
+/** A box with a CSS `animation` running the 1000px slide keyframes. */
+function cssSlideBox(id: string, animation: string): string {
+	return `<style>${SLIDE_CSS}</style><div id="${id}" style="${BOX_STYLE}top:0;animation:${animation};"></div>`;
+}
+
+/** Advance the virtual clock by totalMs in frameMs steps, as the render driver does. */
+async function advanceClock(page: ShimPage, totalMs: number, frameMs = FRAME_MS): Promise<void> {
+	for (let advanced = 0; advanced < totalMs; advanced += frameMs) {
+		await page.evaluate(`window.__VW_ADVANCE_CLOCK__(${Math.min(frameMs, totalMs - advanced)})`);
+	}
+}
+
+async function virtualNow(page: ShimPage): Promise<number> {
+	return page.evaluate(() => performance.now());
+}
+
+/**
+ * Keep an animation on #id as window.__anims[id] and record how it ends: the
+ * virtual time its finished promise resolves (window.__finishedAt[id]), the
+ * name of the error it rejects with (window.__finishError[id]), and whether
+ * its finish event fired (window.__finishEvent[id]). With slideOptions,
+ * starts a linear WAAPI translateX(0 -> 1000px) on #id, so for a 1000ms
+ * duration the offset in px equals progress through an iteration in ms.
+ * Without, watches the element's existing (CSS) animation.
+ */
+async function watchAnimation(
+	page: ShimPage,
+	id: string,
+	slideOptions?: KeyframeAnimationOptions,
+): Promise<void> {
+	await page.evaluate(
+		([elId, opts]) => {
+			const el = document.getElementById(elId);
+			if (!el) throw new Error(`#${elId} not found`);
+			const anim = opts
+				? el.animate([{ transform: "translateX(0px)" }, { transform: "translateX(1000px)" }], {
+						easing: "linear",
+						...opts,
+					})
+				: el.getAnimations()[0];
+			window.__anims = { ...window.__anims, [elId]: anim };
+			anim.finished.then(
+				() => {
+					window.__finishedAt = { ...window.__finishedAt, [elId]: performance.now() };
+				},
+				(e: Error) => {
+					window.__finishError = { ...window.__finishError, [elId]: e.name };
+				},
+			);
+			anim.addEventListener("finish", () => {
+				window.__finishEvent = { ...window.__finishEvent, [elId]: true };
+			});
+		},
+		[id, slideOptions] as const,
+	);
+}
+
+async function finishedAt(page: ShimPage, id: string): Promise<number | undefined> {
+	return page.evaluate((elId) => window.__finishedAt?.[elId], id);
+}
+
+async function animationCurrentTime(page: ShimPage, id: string): Promise<number> {
+	return page.evaluate((elId) => Number(window.__anims?.[elId]?.currentTime), id);
+}
+
+async function translateX(page: ShimPage, id: string): Promise<number> {
+	return page.evaluate((elId) => {
+		const el = document.getElementById(elId);
+		if (!el) throw new Error(`#${elId} not found`);
+		const transform = getComputedStyle(el).transform;
+		return transform === "none" ? 0 : new DOMMatrixReadOnly(transform).m41;
+	}, id);
+}
+
+/** Distance between two offsets on a 1000px loop, treating its end and start as the same point. */
+function loopDistance(a: number, b: number): number {
+	const d = Math.abs(a - b) % 1000;
+	return Math.min(d, 1000 - d);
 }
 
 describe.skipIf(!hasBrowser)("time shim: primitive-level DOM assertions", () => {
@@ -720,6 +826,362 @@ describe.skipIf(!hasBrowser)("time shim: primitive-level DOM assertions", () => 
 			// Advance one frame -- the converted rAF callback should fire
 			await page.evaluate("window.__VW_ADVANCE_CLOCK__(16)");
 			expect(await page.locator("#raf-marker").textContent()).toBe("after");
+		} finally {
+			await context.close();
+		}
+	});
+
+	it("WAAPI iterations: Infinity keeps looping past its first iteration", async () => {
+		const { page, context } = await createShimmedPage(boxes("box"));
+
+		try {
+			await watchAnimation(page, "box", { duration: 1000, iterations: Number.POSITIVE_INFINITY });
+
+			let now = 0;
+			for (const t of [250, 1500, 2750, 3900]) {
+				await advanceClock(page, t - now);
+				now = t;
+				expect(await translateX(page, "box"), `at ${t}ms`).toBeCloseTo(t % 1000, 0);
+			}
+		} finally {
+			await context.close();
+		}
+	});
+
+	it("WAAPI iterations: Infinity never resolves finished", async () => {
+		const { page, context } = await createShimmedPage(boxes("box"));
+
+		try {
+			await watchAnimation(page, "box", { duration: 1000, iterations: Number.POSITIVE_INFINITY });
+			await advanceClock(page, 10_000, 100);
+
+			expect(await finishedAt(page, "box")).toBeUndefined();
+			expect(await translateX(page, "box")).toBeCloseTo(0, 0);
+			await advanceClock(page, 400);
+			expect(await translateX(page, "box")).toBeCloseTo(400, 0);
+		} finally {
+			await context.close();
+		}
+	});
+
+	it("WAAPI iterations: 3 animates every iteration and finishes at 3x duration", async () => {
+		const { page, context } = await createShimmedPage(boxes("box"));
+
+		try {
+			const t0 = await virtualNow(page);
+			await watchAnimation(page, "box", { duration: 1000, iterations: 3, fill: "forwards" });
+
+			let now = 0;
+			for (const t of [500, 1500, 2500]) {
+				await advanceClock(page, t - now);
+				now = t;
+				expect(await translateX(page, "box"), `at ${t}ms`).toBeCloseTo(500, 0);
+			}
+
+			await advanceClock(page, 450);
+			expect(await finishedAt(page, "box")).toBeUndefined();
+
+			await advanceClock(page, 200);
+			expect((await finishedAt(page, "box")) ?? Number.NaN).toBeCloseTo(t0 + 3000, 3);
+			expect(await translateX(page, "box")).toBeCloseTo(1000, 0);
+		} finally {
+			await context.close();
+		}
+	});
+
+	it("WAAPI end time includes delay and endDelay", async () => {
+		const { page, context } = await createShimmedPage(boxes("box"));
+
+		try {
+			const t0 = await virtualNow(page);
+			await watchAnimation(page, "box", {
+				duration: 500,
+				delay: 200,
+				endDelay: 300,
+				iterations: 2,
+			});
+			await advanceClock(page, 2000);
+
+			expect((await finishedAt(page, "box")) ?? Number.NaN).toBeCloseTo(t0 + 1500, 3);
+		} finally {
+			await context.close();
+		}
+	});
+
+	it("end time follows updateTiming() after the animation is tracked", async () => {
+		const { page, context } = await createShimmedPage(boxes("box"));
+
+		try {
+			const t0 = await virtualNow(page);
+			await watchAnimation(page, "box", { duration: 1000, iterations: Number.POSITIVE_INFINITY });
+			await advanceClock(page, 500);
+			await page.evaluate(() => window.__anims?.box.effect?.updateTiming({ iterations: 2 }));
+			await advanceClock(page, 2000);
+
+			expect((await finishedAt(page, "box")) ?? Number.NaN).toBeCloseTo(t0 + 2000, 3);
+		} finally {
+			await context.close();
+		}
+	});
+
+	it("WAAPI playbackRate scales progress, including a mid-animation change", async () => {
+		const { page, context } = await createShimmedPage(boxes("box"));
+
+		try {
+			const t0 = await virtualNow(page);
+			await watchAnimation(page, "box", { duration: 1000, fill: "forwards" });
+			await page.evaluate(() => {
+				const anim = window.__anims?.box;
+				if (anim) anim.playbackRate = 2;
+			});
+
+			await advanceClock(page, 250);
+			expect(await translateX(page, "box")).toBeCloseTo(500, 0);
+
+			await page.evaluate(() => window.__anims?.box.updatePlaybackRate(0.5));
+			await advanceClock(page, 500);
+			expect(await translateX(page, "box")).toBeCloseTo(750, 0);
+			expect(await finishedAt(page, "box")).toBeUndefined();
+
+			await advanceClock(page, 600);
+			expect((await finishedAt(page, "box")) ?? Number.NaN).toBeCloseTo(t0 + 1250, 3);
+		} finally {
+			await context.close();
+		}
+	});
+
+	it("WAAPI with negative playbackRate finishes when it plays back to 0", async () => {
+		const { page, context } = await createShimmedPage(boxes("box"));
+
+		try {
+			const t0 = await virtualNow(page);
+			await watchAnimation(page, "box", { duration: 1000 });
+			await advanceClock(page, 600);
+			await page.evaluate(() => {
+				const anim = window.__anims?.box;
+				if (anim) anim.playbackRate = -1;
+			});
+
+			await advanceClock(page, 300);
+			expect(await translateX(page, "box")).toBeCloseTo(300, 0);
+			expect(await finishedAt(page, "box")).toBeUndefined();
+
+			await advanceClock(page, 400);
+			expect((await finishedAt(page, "box")) ?? Number.NaN).toBeCloseTo(t0 + 1200, 3);
+		} finally {
+			await context.close();
+		}
+	});
+
+	it("cancelled infinite animation is not driven again", async () => {
+		const { page, context } = await createShimmedPage(boxes("box"));
+
+		try {
+			await watchAnimation(page, "box", { duration: 1000, iterations: Number.POSITIVE_INFINITY });
+			await advanceClock(page, 1500);
+			await page.evaluate(() => window.__anims?.box.cancel());
+			await advanceClock(page, 1000);
+
+			expect(await page.evaluate(() => window.__anims?.box.playState)).toBe("idle");
+			expect(await translateX(page, "box")).toBe(0);
+			expect(await page.evaluate(() => window.__finishError?.box)).toBe("AbortError");
+		} finally {
+			await context.close();
+		}
+	});
+
+	it("removed element: infinite loop stops being driven, finite animation still finishes", async () => {
+		const { page, context } = await createShimmedPage(boxes("loop", "once"));
+
+		try {
+			const t0 = await virtualNow(page);
+			await watchAnimation(page, "loop", { duration: 1000, iterations: Number.POSITIVE_INFINITY });
+			await watchAnimation(page, "once", { duration: 1000 });
+			await advanceClock(page, 300);
+			await page.evaluate(() => {
+				document.getElementById("loop")?.remove();
+				document.getElementById("once")?.remove();
+			});
+			await advanceClock(page, 1200);
+
+			expect(await animationCurrentTime(page, "loop")).toBeCloseTo(300, 3);
+			expect((await finishedAt(page, "once")) ?? Number.NaN).toBeCloseTo(t0 + 1000, 3);
+		} finally {
+			await context.close();
+		}
+	});
+
+	it("player transition pattern: fill-forwards pair resolves at its duration, cancel clears it", async () => {
+		// Mirrors src/player/transitions/fade.ts plus clearSlotAnimations().
+		const { page, context } = await createShimmedPage(boxes("out", "in"));
+
+		try {
+			const t0 = await virtualNow(page);
+			await page.evaluate(() => {
+				const out = document.getElementById("out");
+				const incoming = document.getElementById("in");
+				if (!out || !incoming) throw new Error("transition elements not found");
+				const opts = { duration: 400, fill: "forwards" as const };
+				const outAnim = out.animate([{ opacity: 1 }, { opacity: 0 }], opts);
+				const inAnim = incoming.animate([{ opacity: 0 }, { opacity: 1 }], opts);
+				window.__anims = { out: outAnim, in: inAnim };
+				Promise.all([outAnim.finished, inAnim.finished]).then(() => {
+					window.__finishedAt = { transition: performance.now() };
+				});
+			});
+			const opacity = (id: string) =>
+				page.evaluate((elId) => {
+					const el = document.getElementById(elId);
+					return el ? Number(getComputedStyle(el).opacity) : Number.NaN;
+				}, id);
+
+			const frameMs = 1000 / 60;
+			await advanceClock(page, 500, frameMs);
+			const doneAt = (await finishedAt(page, "transition")) ?? Number.NaN;
+			expect(doneAt - t0).toBeGreaterThanOrEqual(400 - 1e-6);
+			expect(doneAt - t0).toBeLessThan(400 + frameMs);
+			expect(await opacity("out")).toBe(0);
+			expect(await opacity("in")).toBe(1);
+
+			await page.evaluate(() => {
+				for (const anim of Object.values(window.__anims ?? {})) anim.cancel();
+			});
+			await advanceClock(page, 200, frameMs);
+			expect(await opacity("out")).toBe(1);
+		} finally {
+			await context.close();
+		}
+	});
+
+	it("finished read during boot resolves at the virtual end time and fires finish", async () => {
+		// Segment 1's play() runs before engagement, so `await el.animate(...).finished`
+		// holds the browser's own promise from passthrough mode.
+		const { page, context } = await createShimmedPage(boxes("box"), false);
+
+		try {
+			await watchAnimation(page, "box", { duration: 1000, fill: "forwards" });
+			await page.evaluate("window.__VW_ENGAGE_VIRTUAL_TIME__()");
+			const t0 = await virtualNow(page);
+			const remaining = 1000 - (await animationCurrentTime(page, "box"));
+
+			await advanceClock(page, 1200);
+
+			const doneAt = (await finishedAt(page, "box")) ?? Number.NaN;
+			expect(doneAt - t0).toBeGreaterThanOrEqual(remaining - 1e-6);
+			expect(doneAt - t0).toBeLessThan(remaining + FRAME_MS);
+			expect(await page.evaluate(() => window.__anims?.box.playState)).toBe("finished");
+			expect(await translateX(page, "box")).toBeCloseTo(1000, 0);
+			// Finish events are dispatched on the browser's next rendered frame.
+			await page.screenshot();
+			expect(await page.evaluate(() => window.__finishEvent?.box)).toBe(true);
+		} finally {
+			await context.close();
+		}
+	});
+
+	it("engagement leaves animations paused during boot paused", async () => {
+		const { page, context } = await createShimmedPage(
+			`${cssSlideBox("css", "slide 1s linear infinite paused")}<div id="waapi" style="${BOX_STYLE}top:60px;"></div>`,
+			false,
+		);
+
+		try {
+			await watchAnimation(page, "waapi", {
+				duration: 1000,
+				iterations: Number.POSITIVE_INFINITY,
+			});
+			await page.evaluate(() => {
+				const anim = window.__anims?.waapi;
+				if (!anim) return;
+				anim.currentTime = 300;
+				anim.pause();
+			});
+			await page.evaluate("window.__VW_ENGAGE_VIRTUAL_TIME__()");
+			// Not a whole number of loops, so a driven loop can't land back in place.
+			await advanceClock(page, 2250);
+
+			expect(await translateX(page, "css")).toBe(0);
+			expect(await translateX(page, "waapi")).toBeCloseTo(300, 0);
+		} finally {
+			await context.close();
+		}
+	});
+
+	it("engagement keeps CSS and WAAPI infinite loops from boot looping", async () => {
+		const { page, context } = await createShimmedPage(
+			`${cssSlideBox("css", "slide 1s linear infinite")}<div id="waapi" style="${BOX_STYLE}top:60px;"></div>`,
+			false,
+		);
+
+		try {
+			await watchAnimation(page, "waapi", {
+				duration: 1000,
+				iterations: Number.POSITIVE_INFINITY,
+			});
+			await page.evaluate("window.__VW_ENGAGE_VIRTUAL_TIME__()");
+			const start = { css: await translateX(page, "css"), waapi: await translateX(page, "waapi") };
+
+			let now = 0;
+			for (const t of [1250, 2500, 3750]) {
+				await advanceClock(page, t - now);
+				now = t;
+				for (const id of ["css", "waapi"] as const) {
+					const expected = start[id] + t;
+					expect(
+						loopDistance(await translateX(page, id), expected),
+						`${id} at ${t}ms`,
+					).toBeLessThan(1);
+				}
+			}
+		} finally {
+			await context.close();
+		}
+	});
+
+	it("engagement finishes a 3-iteration CSS animation at its full end time", async () => {
+		const { page, context } = await createShimmedPage(
+			cssSlideBox("css", "slide 1s linear 3 forwards"),
+			false,
+		);
+
+		try {
+			await page.evaluate("window.__VW_ENGAGE_VIRTUAL_TIME__()");
+			await watchAnimation(page, "css");
+			const t0 = await virtualNow(page);
+			const remaining = 3000 - (await animationCurrentTime(page, "css"));
+
+			await advanceClock(page, remaining - 1500);
+			expect(await translateX(page, "css")).toBeCloseTo(500, 0);
+			expect(await finishedAt(page, "css")).toBeUndefined();
+
+			await advanceClock(page, 1600);
+			expect((await finishedAt(page, "css")) ?? Number.NaN).toBeCloseTo(t0 + remaining, 3);
+			expect(await translateX(page, "css")).toBeCloseTo(1000, 0);
+		} finally {
+			await context.close();
+		}
+	});
+
+	it("end time follows CSS changes to an adopted CSS animation", async () => {
+		const { page, context } = await createShimmedPage(
+			cssSlideBox("css", "slide 1s linear infinite"),
+			false,
+		);
+
+		try {
+			await page.evaluate("window.__VW_ENGAGE_VIRTUAL_TIME__()");
+			await watchAnimation(page, "css");
+			const t0 = await virtualNow(page);
+			const remaining = 2000 - (await animationCurrentTime(page, "css"));
+			await page.evaluate(() => {
+				const el = document.getElementById("css");
+				if (el) el.style.animationIterationCount = "2";
+			});
+			await advanceClock(page, 2500);
+
+			const doneAt = (await finishedAt(page, "css")) ?? Number.NaN;
+			expect(doneAt - t0).toBeGreaterThanOrEqual(remaining - 1e-6);
+			expect(doneAt - t0).toBeLessThan(remaining + FRAME_MS);
 		} finally {
 			await context.close();
 		}
