@@ -117,5 +117,5 @@ This project was initially made for the [Kiln AI](https://kiln.tech) [launch vid
 
 ## License
 
-[MIT](LICENSE)
+Released under the [MIT](LICENSE) license.
 
