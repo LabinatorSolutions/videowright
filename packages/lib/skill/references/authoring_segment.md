@@ -87,7 +87,22 @@ Use **`ctx.hold(ms)`** for timed pauses that are internal to a beat — entrance
 
 ### Render-safe animation patterns
 
-Render mode uses a **virtual clock** that the render driver advances frame by frame between captured screenshots. The render shim virtualizes all timer primitives: `performance.now()`, `Date.now()`, `setTimeout`, `setInterval`, and `requestAnimationFrame` all reflect deterministic virtual time. WAAPI and CSS animations also run on the document timeline, which the render driver controls.
+Render mode uses a **virtual clock** that the render driver advances frame by frame between captured screenshots. The render shim virtualizes all timer primitives: `performance.now()`, `Date.now()`, `setTimeout`, `setInterval`, and `requestAnimationFrame` all reflect deterministic virtual time. The shim also takes over WAAPI animations, CSS animations and CSS transitions: it pauses each one and drives it from the virtual clock, whenever it starts (at mount, in `play()`, after a class change), through every loop, through `animation-play-state` changes, and through `play()`, `pause()`, `reverse()`, `finish()` and `currentTime` changes.
+
+#### Not controlled by the render clock — avoid in segments
+
+These run on the browser's real clock, so in a render they play at the wrong speed and differ from run to run:
+
+- SVG SMIL animation (`<animate>`, `<animateTransform>`, `<animateMotion>`, `<set>`). Animate SVG elements with WAAPI or CSS instead.
+- Autoplaying `<video>`, and animated GIF, APNG or WebP images.
+- Animations on any timeline but the page's own: scroll-driven animations (`animation-timeline: scroll()` / `view()`, `ScrollTimeline`, `ViewTimeline`), which aren't time-based, or a `new DocumentTimeline()`.
+- Content inside an `<iframe>`: the render clock drives only the top-level page.
+- CSS animations and transitions inside a shadow root (web components): the render clock only discovers animations in the page's own document tree. Drive those elements with WAAPI `el.animate()` instead.
+- Code that reads `document.timeline.currentTime` or an animation's `startTime`.
+
+Use WAAPI, CSS animations and transitions, or a rAF loop reading `ctx.clock()` instead.
+
+Two limits when controlling an animation from code: setting its `startTime` doesn't move it in a render (seek with `currentTime`), and reading its `currentTime` inside a frame callback gives the previous frame's value. For time-derived values, read `ctx.clock()`.
 
 #### Patterns and recommendations
 
@@ -141,7 +156,7 @@ requestAnimationFrame(tick);
 
 **1. WAAPI for DOM animations** (the default choice):
 ```ts
-// GOOD: WAAPI animations run on the document timeline — render-safe
+// GOOD: WAAPI animations follow the render clock — render-safe
 el.animate(
   [
     { opacity: 0, transform: 'translateY(20px)' },
@@ -168,7 +183,7 @@ items.forEach((item, i) => {
 
 **2. CSS animations and transitions** declared in CSS or set via `el.style.animation`:
 ```ts
-// GOOD: CSS animation — runs on document timeline, render-safe
+// GOOD: CSS animation — follows the render clock, render-safe
 el.style.animation = 'fadeIn 0.5s ease-out forwards';
 ```
 
@@ -397,11 +412,11 @@ Rules:
 
 Segments own their DOM. Inside a segment, use whatever fits:
 
-- **CSS animations and transitions** for simple motion. Render-safe -- they run on the document timeline.
-- **GSAP** for complex timeline-based animation. Render-safe when using its document-timeline mode.
+- **CSS animations and transitions** for simple motion. Render-safe -- the render shim drives them from the virtual clock.
+- **GSAP** for complex timeline-based animation. Render-safe -- its ticker runs on `requestAnimationFrame` and the page clock, which the render shim virtualizes.
 - **Three.js / WebGL** for 3D scenes. Drive time-derived values with `ctx.clock()`, not `performance.now()`. See render-safe patterns above.
 - **Lottie** for After Effects animations. Use manual frame drive with `ctx.clock()` (`autoplay: false`, `anim.goToAndStop(ctx.clock(), false)`). See render-safe patterns above.
-- **Animated SVG** for vector graphics. Use WAAPI or CSS animations for SVG element animations.
+- **Animated SVG** for vector graphics. Use WAAPI or CSS animations for SVG element animations, not SMIL (`<animate>`).
 - **React / shadcn** for component-driven UI (attach to `el` via `createRoot`).
 - **echarts / D3** for data visualization.
 - **Canvas 2D** for pixel-level control. Use `ctx.clock()` for time-derived drawing.
